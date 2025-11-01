@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Free Browser AI Agent</title>
+    <title>Browser AI Agent (OpenRouter Llama 3.3 8B Free)</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <style>
       body {
@@ -11,7 +11,7 @@
         color: #e2e8f0;
         display: flex;
         justify-content: center;
-        padding: 28px 12px 100px;
+        padding: 32px 12px 100px;
       }
       .app {
         width: min(900px, 100%);
@@ -21,7 +21,7 @@
         padding: 20px 20px 26px;
       }
       h1 {
-        font-size: 1.4rem;
+        font-size: 1.3rem;
         margin-bottom: 6px;
       }
       .hint {
@@ -31,10 +31,12 @@
       .row {
         display: flex;
         gap: 8px;
+        margin-bottom: 8px;
       }
-      input[type="text"] {
+      input[type="text"],
+      input[type="password"] {
         flex: 1;
-        padding: 10px 12px;
+        padding: 9px 12px;
         border-radius: 10px;
         border: 1px solid rgba(148, 163, 184, 0.3);
         background: rgba(15, 23, 42, 0.4);
@@ -50,7 +52,7 @@
         cursor: pointer;
       }
       button:disabled {
-        opacity: 0.6;
+        opacity: 0.5;
         cursor: not-allowed;
       }
       .panel {
@@ -63,7 +65,6 @@
       .label {
         font-size: 0.65rem;
         text-transform: uppercase;
-        letter-spacing: 0.06rem;
         color: #94a3b8;
         margin-bottom: 4px;
       }
@@ -85,21 +86,27 @@
   </head>
   <body>
     <div class="app">
-      <h1>Free Browser AI Agent</h1>
+      <h1>Browser AI Agent</h1>
       <p class="hint">
-        Try: <b>weather in Mumbai</b>, <b>temperature in Toronto</b>, or <b>btc price</b>. Runs fully in your browser using
-        WebLLM. Model files come from the public MLC CDN. :contentReference[oaicite:1]{index=1}
+        1) Paste your <b>OpenRouter API key</b> (it stays here). 2) Ask: <b>weather in Mumbai</b> or <b>btc price</b>. The agent
+        will call <code>meta-llama/llama-3.3-8b-instruct:free</code> to pick the tool, then call real APIs.
       </p>
 
+      <!-- 1) key -->
+      <div class="row">
+        <input id="api-key" type="password" placeholder="OpenRouter API key (sk-or-...)" />
+      </div>
+
+      <!-- 2) user query -->
       <div class="row">
         <input id="user-input" type="text" placeholder="Ask me…" />
         <button id="run-btn">Run</button>
       </div>
 
-      <p class="warn" id="status">loading model engine…</p>
+      <p class="warn" id="status">Idle.</p>
 
       <div class="panel" id="thinking-panel" style="display:none;">
-        <div class="label">LLM decision</div>
+        <div class="label">LLM decision (raw)</div>
         <pre id="thinking"></pre>
       </div>
 
@@ -109,49 +116,28 @@
       </div>
     </div>
 
-    <script type="module">
-      if (!("gpu" in navigator)) {
-  document.getElementById("status").textContent =
-    "Your browser doesn't have WebGPU. Open in latest Chrome/Edge on desktop.";
-}
-
-      import * as webllm from "https://esm.run/@mlc-ai/web-llm";
-
-      const statusEl = document.getElementById("status");
+    <script>
+      const keyEl = document.getElementById("api-key");
       const inputEl = document.getElementById("user-input");
       const runBtn = document.getElementById("run-btn");
+      const statusEl = document.getElementById("status");
       const thinkingPanel = document.getElementById("thinking-panel");
       const thinkingEl = document.getElementById("thinking");
       const resultPanel = document.getElementById("result-panel");
       const answerEl = document.getElementById("answer");
 
-      const modelId = "SmolLM2-360M-Instruct-q4f32_1-MLC";
-
-      const engine = await webllm.CreateMLCEngine(
-        { model: modelId },
-        {
-          initProgressCallback: (report) => {
-            statusEl.textContent = "model: " + report.text;
-          },
-        },
-      );
-
-      statusEl.textContent = "model ready.";
-
+      // ---- tools ----
       async function weatherTool(locationName) {
-        const geoUrl =
+        const geo = await fetch(
           "https://geocoding-api.open-meteo.com/v1/search?name=" +
-          encodeURIComponent(locationName) +
-          "&count=1&language=en&format=json";
-        const geoRes = await fetch(geoUrl);
-        const geo = await geoRes.json();
+            encodeURIComponent(locationName) +
+            "&count=1&language=en&format=json",
+        ).then((r) => r.json());
         if (!geo.results || !geo.results.length) throw new Error("place not found");
         const { latitude, longitude, name, country } = geo.results[0];
-        const wUrl =
-          `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
-          "&current=temperature_2m,apparent_temperature,weather_code&timezone=auto";
-        const wRes = await fetch(wUrl);
-        const w = await wRes.json();
+        const w = await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,apparent_temperature&timezone=auto`,
+        ).then((r) => r.json());
         return {
           place: `${name}, ${country}`,
           temp: w.current.temperature_2m,
@@ -160,77 +146,93 @@
       }
 
       async function btcTool() {
-        const r = await fetch("https://api.coindesk.com/v1/bpi/currentprice.json");
-        const d = await r.json();
+        const d = await fetch("https://api.coindesk.com/v1/bpi/currentprice.json").then((r) => r.json());
         return { usd: d.bpi.USD.rate, time: d.time.updated };
       }
 
+      // ---- call OpenRouter with Llama 3.3 8B free ----
+      async function askOpenRouter(apiKey, userText) {
+        const body = {
+          model: "meta-llama/llama-3.3-8b-instruct:free",
+          messages: [
+            {
+              role: "system",
+              content:
+                'You are a tool router. Reply with JSON ONLY. Tools: weather(location), btc, unknown. Examples: {"tool":"weather","location":"Delhi"}, {"tool":"btc"}, {"tool":"unknown"}',
+            },
+            { role: "user", content: userText },
+          ],
+          temperature: 0,
+          max_tokens: 200,
+        };
+
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + apiKey,
+            "Content-Type": "application/json",
+            // optional but nice
+            "HTTP-Referer": "https://example.com/",
+            "X-Title": "mini-browser-agent",
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error("OpenRouter error: " + txt);
+        }
+
+        const data = await res.json();
+        return data.choices[0].message.content.trim();
+      }
+
       async function runAgent() {
+        const apiKey = keyEl.value.trim();
         const text = inputEl.value.trim();
+        if (!apiKey) {
+          alert("Paste your OpenRouter key first.");
+          return;
+        }
         if (!text) return;
 
         runBtn.disabled = true;
+        statusEl.textContent = "contacting model…";
         thinkingPanel.style.display = "block";
+        thinkingEl.textContent = "";
         resultPanel.style.display = "none";
-        thinkingEl.textContent = "thinking…";
-
-        const prompt = `
-You are a tool router. You must ALWAYS answer valid JSON.
-Tools:
-1) "weather" -> when user asks about weather, temp, forecast, cold, hot, rain, city, location.
-   Needs field: "location".
-2) "btc" -> when user asks about bitcoin, btc, crypto price.
-3) "unknown" -> otherwise.
-
-Return ONLY JSON. Examples:
-{"tool":"weather","location":"Delhi"}
-{"tool":"btc"}
-{"tool":"unknown"}
-
-User query: "${text}"
-Answer:
-        `.trim();
-
-        const reply = await engine.chat.completions.create({
-          messages: [
-            { role: "system", content: "You route to tools and output JSON only." },
-            { role: "user", content: prompt },
-          ],
-          model: modelId,
-          stream: false,
-          temperature: 0,
-        });
-
-        const llmOut = reply.choices[0].message.content.trim();
-        thinkingEl.textContent = llmOut;
-
-        let decision;
-        try {
-          decision = JSON.parse(llmOut);
-        } catch (e) {
-          answerEl.textContent = "LLM did not return JSON. You can still ask again.";
-          resultPanel.style.display = "block";
-          runBtn.disabled = false;
-          return;
-        }
 
         try {
+          const llmOut = await askOpenRouter(apiKey, text);
+          thinkingEl.textContent = llmOut;
+
+          let decision;
+          try {
+            decision = JSON.parse(llmOut);
+          } catch (e) {
+            answerEl.textContent = "Model didn't return JSON. Try a simpler query.";
+            resultPanel.style.display = "block";
+            statusEl.textContent = "done (but JSON parse failed).";
+            return;
+          }
+
           if (decision.tool === "weather") {
-            const loc = decision.location || "Delhi";
-            const w = await weatherTool(loc);
+            const w = await weatherTool(decision.location || "Delhi");
             answerEl.textContent = `Weather in ${w.place}: ${w.temp}°C (feels ${w.feels}°C).`;
           } else if (decision.tool === "btc") {
             const b = await btcTool();
             answerEl.textContent = `BTC price: $${b.usd} (as of ${b.time}).`;
           } else {
-            answerEl.textContent = "I don’t have a tool for that yet.";
+            answerEl.textContent = "I don't have a tool for that yet.";
           }
-        } catch (err) {
-          answerEl.textContent = "Tool error: " + err.message;
-        }
 
-        resultPanel.style.display = "block";
-        runBtn.disabled = false;
+          resultPanel.style.display = "block";
+          statusEl.textContent = "done.";
+        } catch (err) {
+          statusEl.textContent = err.message;
+        } finally {
+          runBtn.disabled = false;
+        }
       }
 
       runBtn.addEventListener("click", runAgent);
