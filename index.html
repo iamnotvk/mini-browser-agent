@@ -110,7 +110,11 @@
     </div>
 
     <script type="module">
-      // 1. load WebLLM from CDN (free)  :contentReference[oaicite:2]{index=2}
+      if (!("gpu" in navigator)) {
+  document.getElementById("status").textContent =
+    "Your browser doesn't have WebGPU. Open in latest Chrome/Edge on desktop.";
+}
+
       import * as webllm from "https://esm.run/@mlc-ai/web-llm";
 
       const statusEl = document.getElementById("status");
@@ -121,10 +125,8 @@
       const resultPanel = document.getElementById("result-panel");
       const answerEl = document.getElementById("answer");
 
-      // choose a smallish model from the public list (works on more machines) :contentReference[oaicite:3]{index=3}
-      const modelId = "SmolLM2-360M-Instruct-q4f16_1-MLC";
+      const modelId = "SmolLM2-360M-Instruct-q4f32_1-MLC";
 
-      // create engine
       const engine = await webllm.CreateMLCEngine(
         { model: modelId },
         {
@@ -136,7 +138,6 @@
 
       statusEl.textContent = "model ready.";
 
-      // ---- tools ----
       async function weatherTool(locationName) {
         const geoUrl =
           "https://geocoding-api.open-meteo.com/v1/search?name=" +
@@ -173,7 +174,6 @@
         resultPanel.style.display = "none";
         thinkingEl.textContent = "thinking…";
 
-        // 2. ask the LOCAL LLM which tool to call
         const prompt = `
 You are a tool router. You must ALWAYS answer valid JSON.
 Tools:
@@ -214,7 +214,6 @@ Answer:
           return;
         }
 
-        // 3. call the tool the LLM picked
         try {
           if (decision.tool === "weather") {
             const loc = decision.location || "Delhi";
